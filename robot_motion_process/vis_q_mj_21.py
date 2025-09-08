@@ -178,7 +178,7 @@ def main(cfg : DictConfig) -> None:
                     for i in range(joint_gt.shape[1]):
                         viewer.user_scn.geoms[i].pos = joint_gt[curr_time, i]
             else:
-                for i in range(23):
+                for i in range(21):
                     viewer.user_scn.geoms[i+1].pos = joint_gt[curr_time, i+1]
             
             if vis_contact: 
@@ -187,7 +187,7 @@ def main(cfg : DictConfig) -> None:
                 
             if vis_tau:
                 scale_factor = 0.1
-                for i in range(23):
+                for i in range(21):
                     tau = curr_motion[vis_tau_key][curr_time, i]
                     color_gradient = abs(tau) * scale_factor
                     if tau > 0:
