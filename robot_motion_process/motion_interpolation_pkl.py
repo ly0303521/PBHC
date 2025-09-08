@@ -100,7 +100,9 @@ def interpolate_motion(input_data, start_ext_frames, end_ext_frames, default_pos
 
 
     # 起始处插值
-    start_rr, start_dof = [], []
+    start_root_trans = np.zeros((0, 3))
+    start_rr = np.zeros((0, 4))
+    start_dof = np.zeros((0, 23))
     if start_ext_frames > 0:
         # root trans
         start_z = np.linspace(default_rt[2],
@@ -144,7 +146,9 @@ def interpolate_motion(input_data, start_ext_frames, end_ext_frames, default_pos
 
 
     # 结束处插值
-    end_rr, end_dof = [], []
+    end_root_trans = np.zeros((0, 3))
+    end_rr = np.zeros((0, 4))
+    end_dof = np.zeros((0, 23))
     if end_ext_frames > 0:
         # 根位移处理（仅Z轴插值）
         end_z = np.linspace(root_trans[-1, 2],
