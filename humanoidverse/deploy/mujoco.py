@@ -508,17 +508,21 @@ class MujocoRobot(URCIRobot, ViewerPlugin):
         root_trans = self.pos
         root_rot = self.quat # XYZW
         root_rot_vec = torch.from_numpy(sRot.from_quat(root_rot).as_rotvec()).float() # type: ignore
-        dof = self.q
-        # T, num_env, J, 3
-        # print(self._motion_lib.mesh_parsers.dof_axis)
-        pose_aa = torch.cat([root_rot_vec[..., None, :], 
-                                torch.from_numpy(self._dof_axis * dof[..., None]), 
-                                torch.zeros((self.num_augment_joint, 3))], axis = 0) # type: ignore
+        dof = torch.from_numpy(self.q).float()
+        dof_axis = torch.from_numpy(self._dof_axis).float()
+        pose_aa = torch.cat(
+            [
+                root_rot_vec[..., None, :],
+                dof_axis * dof[..., None],
+                torch.zeros((self.num_augment_joint, 3)),
+            ],
+            axis=0,
+        )
         
         return motion_time, {
             'root_trans_offset': torch.from_numpy(root_trans),
             'root_rot': torch.from_numpy(root_rot), # 统一save xyzw
-            'dof': torch.from_numpy(dof),
+            'dof': dof,
             'pose_aa': pose_aa,
             'action': torch.from_numpy(self.act),
             'actor_obs': np2torch(self.obs_buf_dict['actor_obs']),
@@ -544,11 +548,14 @@ class MujocoRobot(URCIRobot, ViewerPlugin):
         root_rot = self.quat # XYZW
         root_rot_vec = np.array(sRot.from_quat(root_rot).as_rotvec(), dtype=np.float32) # type: ignore
         dof = self.q
-        # T, num_env, J, 3
-        # print(self._motion_lib.mesh_parsers.dof_axis)
-        pose_aa = np.concatenate([root_rot_vec[..., None, :], 
-                                np.array(self._dof_axis * dof[..., None]), 
-                                np.zeros((self.num_augment_joint, 3))], axis = 0) # type: ignore
+        pose_aa = np.concatenate(
+            [
+                root_rot_vec[..., None, :],
+                self._dof_axis * dof[..., None],
+                np.zeros((self.num_augment_joint, 3)),
+            ],
+            axis=0,
+        )
         
         return motion_time, {
             'root_trans_offset': (root_trans).copy(),

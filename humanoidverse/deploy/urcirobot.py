@@ -69,6 +69,8 @@ class URCIRobot:
         self.clip_action_limit: float = cfg.robot.control.action_clip_value
         self.clip_observations: float = cfg.env.config.normalization.clip_observations
         self.action_scale: float = cfg.robot.control.action_scale
+
+        self.actions_dim = getattr(cfg.robot, "actions_dim", 23)
         
         self._make_init_pose()
         self._make_buffer()
@@ -326,11 +328,11 @@ class URCIRobot:
         self.relyaw = current_yaw - self.ref_init_yaw
         
         relyaw_heading_inv_quat = calc_yaw_heading_quat_inv(torch.from_numpy(self.relyaw).to(dtype=torch.float32).unsqueeze(0))
-        relyaw_heading_inv_quat_expand = relyaw_heading_inv_quat.unsqueeze(1).expand(-1, 27, -1).reshape(-1, 4)
+        relyaw_heading_inv_quat_expand = relyaw_heading_inv_quat.unsqueeze(1).expand(-1, self.num_rigid_bodies, -1).reshape(-1, 4)
 
         heading_inv_rot = calc_heading_quat_inv(torch.from_numpy(self.quat).to(dtype=torch.float32).unsqueeze(0), w_last=True) #xyzw
         # # expand to (B*num_rigid_bodies, 4) for fatser computation in jit
-        heading_inv_rot_expand = heading_inv_rot.unsqueeze(1).expand(-1, 27, -1).reshape(-1, 4)
+        heading_inv_rot_expand = heading_inv_rot.unsqueeze(1).expand(-1, self.num_rigid_bodies, -1).reshape(-1, 4)
 
 
         ref_joint_pos = motion_res["dof_pos"] # [num_envs, num_dofs]
@@ -365,7 +367,7 @@ class URCIRobot:
         assert self.cfg is not None or not isinstance(self.cfg, OmegaConf), "cfg is not set"
         
         assert self.num_dofs is not None, "num_dofs is not set"
-        assert self.num_dofs == 23, "In policy level, only 23 dofs are supported for now"
+        assert self.num_dofs == self.actions_dim, "In policy level, only 21 or 23 dofs are supported for now"
         assert self.kp is not None and type(self.kp) == np.ndarray and self.kp.shape == (self.num_dofs,), "kp is not set"
         assert self.kd is not None and type(self.kd) == np.ndarray and self.kd.shape == (self.num_dofs,), "kd is not set"
         
@@ -383,9 +385,11 @@ class URCIRobot:
         cfg_init_state = self.cfg.robot.init_state
         self.body_names = self.cfg.robot.body_names
         self.dof_names = self.cfg.robot.dof_names
-        self.num_bodies = len(self.body_names)
+        self.num_bodies = self.cfg.robot.num_bodies
+        self.num_extend_bodies = len(self.cfg.robot.motion.extend_config)
+        self.num_rigid_bodies = self.num_bodies + self.num_extend_bodies
         self.num_dofs = len(self.dof_names)
-        assert self.num_dofs == 23, "Only 23 dofs are supported for now"
+        assert self.num_dofs == self.actions_dim, "Only 21 or 23 dofs are supported for now"
         
         
         dof_init_pose = cfg_init_state.default_joint_angles
@@ -431,9 +435,9 @@ class URCIRobot:
         self.relyaw = np.zeros(1,dtype=np.float32)
         self.dif_joint_angles = torch.zeros(self.num_dofs, dtype=torch.float32)
         self.dif_joint_velocities = torch.zeros(self.num_dofs, dtype=torch.float32)
-        self._obs_global_ref_body_vel = torch.zeros(27*3, dtype=torch.float32)  # 27 rigid bodies, each has 3 velocity components
-        self._obs_local_ref_rigid_body_vel = torch.zeros(27*3, dtype=torch.float32)
-        self._obs_local_ref_rigid_body_pos_relyaw = torch.zeros(27*3, dtype=torch.float32)
+        self._obs_global_ref_body_vel = torch.zeros(self.num_rigid_bodies * 3, dtype=torch.float32)  # rigid bodies * 3 velocity components
+        self._obs_local_ref_rigid_body_vel = torch.zeros(self.num_rigid_bodies * 3, dtype=torch.float32)
+        self._obs_local_ref_rigid_body_pos_relyaw = torch.zeros(self.num_rigid_bodies * 3, dtype=torch.float32)
         ...
         
     def _make_motionlib(self, cfg_policies: List[URCIPolicyObs]):
@@ -483,9 +487,17 @@ class URCIRobot:
         logger.info("Save Motion Dir: ", self.save_motion_dir)
         OmegaConf.save(self.cfg, self.save_motion_dir / "config.yaml")
         
+        dof_count = len(self.q)
+        axis_dir = Path('description/robots/g1')
+        axis_file = axis_dir / f'dof_{dof_count}dof_axis.npy'
+        if not axis_file.exists():
+            axis_file = axis_dir / 'dof_axis.npy'
 
-        self._dof_axis = np.load('humanoidverse/utils/motion_lib/dof_axis.npy', allow_pickle=True)
-        self._dof_axis = self._dof_axis.astype(np.float32)
+        self._dof_axis = np.load(axis_file, allow_pickle=True).astype(np.float32)
+        if self._dof_axis.shape[0] != dof_count:
+            raise ValueError(
+                f"DOF axis file {axis_file} has {self._dof_axis.shape[0]} DOFs, expected {dof_count}"
+            )
 
         self.num_augment_joint = len(self.cfg.robot.motion.extend_config)
         self.motions_for_saving: Dict[str, List[np.ndarray]] = {'root_trans_offset':[], 'pose_aa':[], 'dof':[], 'root_rot':[], 'actor_obs':[], 'action':[], 'terminate':[],
