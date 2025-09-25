@@ -387,17 +387,111 @@ class MujocoRobot(URCIRobot, ViewerPlugin):
     
         
     
+    def _get_motion_debug_info(self):
+        if not getattr(self, "is_motion_tracking", False):
+            return None
+
+        motion_lib = getattr(self, "motion_lib", None)
+        if motion_lib is None:
+            return None
+
+        motion_ids = getattr(motion_lib, "_curr_motion_ids", None)
+        if motion_ids is None:
+            return None
+
+        env_idx = 0
+        try:
+            if torch.is_tensor(motion_ids):
+                if motion_ids.numel() == 0:
+                    return None
+                motion_id = int(motion_ids.view(-1)[env_idx].item())
+            else:
+                flat_ids = np.array(motion_ids).reshape(-1)
+                if flat_ids.size == 0:
+                    return None
+                motion_id = int(flat_ids[env_idx])
+        except Exception:
+            return None
+
+        try:
+            motion_len = float(motion_lib._motion_lengths[motion_id])
+            num_frames = int(motion_lib._motion_num_frames[motion_id])
+            motion_dt = float(motion_lib._motion_dt[motion_id])
+        except Exception:
+            return None
+
+        control_step = max(self.timer - 1, 0)
+        sim_time = control_step * self.dt
+        motion_time = float(getattr(self, "motion_time", sim_time))
+        if motion_len > 0.0:
+            motion_time = float(np.clip(motion_time, 0.0, motion_len))
+            phase = float(np.clip(motion_time / motion_len, 0.0, 1.0))
+        else:
+            phase = None
+
+        frame_idx = None
+        next_frame_idx = None
+        frame_blend = None
+        if motion_len > 0.0 and num_frames > 0:
+            frame_pos = (phase if phase is not None else 0.0) * (num_frames - 1)
+            frame_idx = int(np.clip(np.floor(frame_pos + 1e-9), 0, num_frames - 1))
+            next_frame_idx = min(frame_idx + 1, num_frames - 1)
+            if motion_dt > 0.0:
+                frame_blend = float(np.clip((motion_time - frame_idx * motion_dt) / motion_dt, 0.0, 1.0))
+
+        motion_key = None
+        curr_keys = getattr(motion_lib, "curr_motion_keys", None)
+        if curr_keys is not None and len(curr_keys) > env_idx:
+            try:
+                motion_key = str(curr_keys[env_idx])
+            except Exception:
+                motion_key = None
+
+        return {
+            "control_step": control_step,
+            "sim_time": sim_time,
+            "motion_time": motion_time,
+            "phase": phase,
+            "frame_idx": frame_idx,
+            "next_frame_idx": next_frame_idx,
+            "frame_blend": frame_blend,
+            "num_frames": num_frames,
+            "motion_key": motion_key,
+        }
+
     def _sanity_check(self, target_q):
-        unsafe_dof = np.where((np.abs(target_q - self.q) > 2.2 ) | 
+        unsafe_dof = np.where((np.abs(target_q - self.q) > 2.2 ) |
                               (np.abs(self.dq) > 20))[0]
         if len(unsafe_dof) > 0:
+            debug_info = self._get_motion_debug_info()
             for motor_idx in unsafe_dof:
-                logger.error(f"Action of joint {motor_idx} is too large.\n"
-                                f"target q\t: {target_q[motor_idx]} \n"
-                                f"target dq\t: {0} \n"
-                                f"q\t\t: {self.q[motor_idx]} \n"
-                                f"dq\t\t: {self.dq[motor_idx]}\n")
-                # breakpoint()  
+                msg_lines = [f"Action of joint {motor_idx} is too large."]
+                if debug_info is not None:
+                    msg_lines.append(f"step idx\t: {debug_info['control_step']}")
+                    msg_lines.append(f"sim time\t: {debug_info['sim_time']:.4f}s")
+                    if debug_info.get("motion_key") is not None:
+                        msg_lines.append(f"motion key\t: {debug_info['motion_key']}")
+                    if debug_info.get("phase") is not None:
+                        msg_lines.append(f"phase\t: {debug_info['phase']:.4f}")
+                    if debug_info.get("frame_idx") is not None:
+                        frame_line = f"frame idx\t: {debug_info['frame_idx']}"
+                        next_idx = debug_info.get("next_frame_idx")
+                        if next_idx is not None and next_idx != debug_info['frame_idx']:
+                            frame_line += f" -> {next_idx}"
+                        num_frames = debug_info.get("num_frames")
+                        if num_frames is not None:
+                            frame_line += f" / {num_frames}"
+                        msg_lines.append(frame_line)
+                    if debug_info.get("frame_blend") is not None:
+                        msg_lines.append(f"frame blend\t: {debug_info['frame_blend']:.3f}")
+                msg_lines.extend([
+                    f"target q\t: {target_q[motor_idx]} ",
+                    f"target dq\t: {0} ",
+                    f"q\t\t: {self.q[motor_idx]} ",
+                    f"dq\t\t: {self.dq[motor_idx]}",
+                ])
+                logger.error("\n".join(msg_lines))
+                # breakpoint()
         
     _motor_offset = np.array([
         3, 0.5, 2, -0.5, -1, 1,
