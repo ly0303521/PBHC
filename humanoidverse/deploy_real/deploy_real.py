@@ -156,7 +156,7 @@ class Controller:
         kps = self.config.kps + self.config.arm_waist_kps
         kds = self.config.kds + self.config.arm_waist_kds
         self.default_pos = np.concatenate((self.config.default_angles, self.config.arm_waist_target), axis=0)
-        self.default_angles = self.default_pos[0:23]
+        self.default_angles = self.default_pos[0:self.config.num_actions]
         dof_size = len(dof_idx)
         
         # record the current pos
