@@ -12,6 +12,7 @@ from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_ as LowCmdGo
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_ as LowStateHG
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_ as LowStateGo
 from unitree_sdk2py.utils.crc import CRC
+from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
 
 from common.command_helper import (
         create_damping_cmd, 
@@ -30,6 +31,17 @@ import onnxruntime as ort
 
 class Controller:
     def __init__(self, config: Config) -> None:
+        # MotionSwitcher：确保低层控制可用（释放其他占用）
+        self.msc = MotionSwitcherClient()
+        self.msc.SetTimeout(5.0)
+        self.msc.Init()
+        status, result = self.msc.CheckMode()
+        while result['name']:
+            # 有其他模式占用，尝试释放
+            self.msc.ReleaseMode()
+            time.sleep(0.5)
+            status, result = self.msc.CheckMode()
+        
         self.config = config
         self.frame_stack = self.config.frame_stack
         
