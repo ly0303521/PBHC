@@ -7,8 +7,8 @@ lowcmd_topic: "rt/lowcmd"
 lowstate_topic: "rt/lowstate"
 
 # 这里填写 21DoF 训练得到的策略模型路径
-policy_path: "/media/ly/ExternalHardDisk/RL_humanoid/PBHC/logs/MotionTracking/20250917_093134-debug-motion_tracking-g1_21dof_lock_wrist/exported/model_99000.onnx"
-motion_file: "/media/ly/ExternalHardDisk/RL_humanoid/PBHC/smpl_retarget/retargeted_motion_data/mink_contact_mask/simple_action_cut_2_cont_mask_inter0.5_S0-30_E205-30.pkl"
+policy_path: "/home/ly/work_space/motions/deploy_real/motion_data/simple_action_cut/model_99000.onnx"
+motion_file: "/home/ly/work_space/motions/deploy_real/motion_data/simple_action_cut/simple_action_cut_2_cont_mask_inter0.5_S0-30_E205-30.pkl"
 
 # 控制的 21 个关节（12条腿 + 腰1自由度 + 8条臂）
 leg_joint2motor_idx: [0, 1, 2, 3, 4, 5,
