@@ -295,6 +295,9 @@ class Controller:
         input_name = self.policy.get_inputs()[0].name
         outputs = self.policy.run(None, {input_name: self.obs_buf.numpy()})
         self.action = outputs[0].squeeze()
+        # Clip actions similar to simulation training
+        if hasattr(self.config, "clip_action_limit") and self.config.clip_action_limit is not None:
+            self.action = np.clip(self.action, -self.config.clip_action_limit, self.config.clip_action_limit)
         # Initial action ramp to avoid sudden jerk at start
         ramp = 1.0
         if self.policy_enable_time is None:
