@@ -98,6 +98,8 @@ class Controller:
             init_cmd_go(self.low_cmd, weak_motor=self.config.weak_motor)
 
         self.start_time = time.time()
+        self.policy_enable_time = None  # for initial action ramp
+        self.history_prefilled = False  # prefill obs history at start
 
         # Initialize histories for each observation type
         self.history = {
@@ -204,6 +206,16 @@ class Controller:
     
 
     def run(self):
+        # Prefill history on first run to avoid spikes
+        if not self.history_prefilled:
+            try:
+                self._prefill_history_once()
+                self.history_prefilled = True
+                # mark policy start time for action ramp
+                if self.policy_enable_time is None:
+                    self.policy_enable_time = time.time()
+            except Exception as e:
+                print(f"History prefill failed: {e}")
 
         self.counter += 1
         # Get the current joint position and velocity
@@ -283,7 +295,15 @@ class Controller:
         input_name = self.policy.get_inputs()[0].name
         outputs = self.policy.run(None, {input_name: self.obs_buf.numpy()})
         self.action = outputs[0].squeeze()
-        target_dof_pos = self.default_angles + self.action * self.config.action_scale
+        # Initial action ramp to avoid sudden jerk at start
+        ramp = 1.0
+        if self.policy_enable_time is None:
+            self.policy_enable_time = time.time()
+        elapsed = time.time() - self.policy_enable_time
+        ramp_duration = 1.0  # seconds
+        if elapsed < ramp_duration:
+            ramp = max(0.0, min(1.0, elapsed / ramp_duration))
+        target_dof_pos = self.default_angles + ramp * (self.action * self.config.action_scale)
 
         # Build low cmd
         for i in range(len(self.config.leg_joint2motor_idx)):
@@ -308,6 +328,48 @@ class Controller:
         self.send_cmd(self.low_cmd)
 
         time.sleep(self.config.control_dt)
+
+    def _prefill_history_once(self):
+        """Fill history deques with the current observation once to reduce the first-step spike."""
+        # Read current joint state
+        for i in range(len(self.config.leg_joint2motor_idx)):
+            self.qj[i] = self.low_state.motor_state[self.config.leg_joint2motor_idx[i]].q
+            self.dqj[i] = self.low_state.motor_state[self.config.leg_joint2motor_idx[i]].dq
+
+        # Read IMU
+        quat = self.low_state.imu_state.quaternion
+        ang_vel = np.array([self.low_state.imu_state.gyroscope], dtype=np.float32)
+
+        if self.config.imu_type == "torso":
+            waist_yaw = self.low_state.motor_state[self.config.arm_waist_joint2motor_idx[0]].q
+            waist_yaw_omega = self.low_state.motor_state[self.config.arm_waist_joint2motor_idx[0]].dq
+            quat, ang_vel = transform_imu_data(waist_yaw=waist_yaw, waist_yaw_omega=waist_yaw_omega, imu_quat=quat, imu_omega=ang_vel)
+
+        gravity_orientation = get_gravity_orientation(quat)
+        qj_obs = (self.qj.copy() - self.default_angles) * self.config.dof_pos_scale
+        dqj_obs = self.dqj.copy() * self.config.dof_vel_scale
+        ang_vel = ang_vel * self.config.ang_vel_scale
+        ref_motion_phase = ((self.counter * self.config.control_dt) % self.motion_len) / self.motion_len
+
+        num_actions = self.config.num_actions
+        curr_obs = np.zeros(self.config.num_obs, dtype=np.float32)
+        curr_obs[: num_actions] = self.action
+        curr_obs[num_actions: num_actions + 3] = ang_vel
+        curr_obs[num_actions + 3: 2 * num_actions + 3] = qj_obs
+        curr_obs[2 * num_actions + 3: 3 * num_actions + 3] = dqj_obs
+        curr_obs[3 * num_actions + 3: 3 * num_actions + 6] = gravity_orientation
+        curr_obs[6 + 3 * num_actions] = ref_motion_phase
+
+        curr_obs_tensor = torch.from_numpy(curr_obs).unsqueeze(0)
+        # Fill history deques
+        self.history["action"].clear(); self.history["omega"].clear(); self.history["qj"].clear(); self.history["dqj"].clear(); self.history["gravity_orientation"].clear(); self.history["ref_motion_phase"].clear()
+        for _ in range(self.frame_stack - 1):
+            self.history["action"].appendleft(curr_obs_tensor[:, :num_actions])
+            self.history["omega"].appendleft(curr_obs_tensor[:, num_actions:num_actions+3])
+            self.history["qj"].appendleft(curr_obs_tensor[:, num_actions+3:num_actions+3+num_actions])
+            self.history["dqj"].appendleft(curr_obs_tensor[:, num_actions+3+num_actions:num_actions+3+2*num_actions])
+            self.history["gravity_orientation"].appendleft(curr_obs_tensor[:, num_actions+3+2*num_actions:num_actions+3+2*num_actions+3])
+            self.history["ref_motion_phase"].appendleft(curr_obs_tensor[:, -1].unsqueeze(0))
 
 
 if __name__ == "__main__":
@@ -335,6 +397,11 @@ if __name__ == "__main__":
 
     # Enter the default position state, press the A key to continue executing
     controller.default_pos_state()
+
+    # Prefill history and mark policy start
+    controller._prefill_history_once()
+    controller.history_prefilled = True
+    controller.policy_enable_time = time.time()
 
     while True:
         try:
