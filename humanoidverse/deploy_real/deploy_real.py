@@ -50,6 +50,10 @@ class Controller:
 
         self.remote_controller = RemoteController()
 
+        # Auto return to default pose after one motion cycle
+        # and wait for resume to avoid abrupt re-entry.
+        self.auto_return_to_default = True
+
         # Initialize the policy network
         # self.policy = torch.jit.load(config.policy_path)
         self.policy = ort.InferenceSession(config.policy_path)
@@ -121,6 +125,28 @@ class Controller:
                     self.history[key].append(torch.zeros(1, 1, dtype=torch.float))
                 else:
                     raise ValueError(f"Not Implement: {key}")
+
+    def _prepare_resume_policy(self):
+        """Prepare to resume policy smoothly: clear action/history and restart ramp."""
+        self.action = np.zeros(self.config.num_actions, dtype=np.float32)
+        self.history_prefilled = False  # let run() prefill once on resume
+        self.policy_enable_time = None  # restart the 1s ramp
+        self.counter = 0                # reset motion phase
+
+    def end_policy_and_return_to_default(self):
+        """Gracefully return to default pose and hold until 'A' to resume.
+
+        - Smoothly move to default using existing interpolated routine.
+        - Hold default pose (default_pos_state) until A is pressed.
+        - Prepare smooth re-entry (history/ramp reset) so next policy step has no jerk.
+        """
+        print("Motion finished. Returning to default pose...")
+        # Smooth interpolation to default
+        self.move_to_default_pos()
+        # Prepare for next policy start (zero action, prefill on resume, ramp restart)
+        self._prepare_resume_policy()
+        # Hold default until A is pressed
+        self.default_pos_state()
 
     def LowStateHgHandler(self, msg: LowStateHG):
         self.low_state = msg
@@ -206,7 +232,7 @@ class Controller:
     
 
     def run(self):
-        # Prefill history on first run to avoid spikes
+        # Prefill history on first run (or after resume) to avoid spikes
         if not self.history_prefilled:
             try:
                 self._prefill_history_once()
@@ -218,6 +244,14 @@ class Controller:
                 print(f"History prefill failed: {e}")
 
         self.counter += 1
+
+        # Auto return to default at the end of one motion cycle
+        # Then wait for 'A' and resume with smooth ramp (to avoid re-entry jerk).
+        if self.auto_return_to_default:
+            motion_elapsed = self.counter * self.config.control_dt
+            if motion_elapsed >= self.motion_len:
+                self.end_policy_and_return_to_default()
+                return
         # Get the current joint position and velocity
         for i in range(len(self.config.leg_joint2motor_idx)):
             self.qj[i] = self.low_state.motor_state[self.config.leg_joint2motor_idx[i]].q
