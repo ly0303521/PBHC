@@ -3,8 +3,7 @@ import numpy as np
 import time
 import torch
 
-from unitree_sdk2py.core.channel import ChannelPublisher, ChannelFactoryInitialize
-from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelFactoryInitialize
+from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher, ChannelFactoryInitialize
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_, unitree_hg_msg_dds__LowState_
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_, unitree_go_msg_dds__LowState_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_ as LowCmdHG
@@ -407,6 +406,23 @@ class Controller:
             self.history["dqj"].appendleft(curr_obs_tensor[:, num_actions+3+num_actions:num_actions+3+2*num_actions])
             self.history["gravity_orientation"].appendleft(curr_obs_tensor[:, num_actions+3+2*num_actions:num_actions+3+2*num_actions+3])
             self.history["ref_motion_phase"].appendleft(curr_obs_tensor[:, -1].unsqueeze(0))
+    
+    def print_dof(self):
+        watch = [
+            ("LeftLegKnee", 3),
+            ("LeftAnklePitch", 4),
+            ("LeftAnkleRoll", 5),
+            ("RightAnklePitch", 10),
+            ("RightAnkleRoll", 11),
+        ]
+        print("*****************************")
+        for label, action_idx in watch:
+            angle = self.low_state.motor_state[self.config.leg_joint2motor_idx[action_idx]].q
+            velocity = self.low_state.motor_state[self.config.leg_joint2motor_idx[action_idx]].dq
+            print(
+                f"{label} (motor {action_idx}): "
+                f"{angle:.3f} rad, {velocity:.3f} rad/s"
+            )
 
 
 if __name__ == "__main__":
@@ -431,6 +447,8 @@ if __name__ == "__main__":
 
     # Move to the default position
     controller.move_to_default_pos()
+
+    # controller.print_dof()
 
     # Enter the default position state, press the A key to continue executing
     controller.default_pos_state()
